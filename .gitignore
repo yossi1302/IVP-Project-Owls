@@ -1,0 +1,16 @@
+# Local competition data and archives
+/data/raw/
+*.zip
+
+# Python and notebooks
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# Local settings
+.DS_Store
+.env
+.env.*
+!.env.example
