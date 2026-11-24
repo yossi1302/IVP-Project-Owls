@@ -1,76 +1,72 @@
-"""Check the local competition CSVs and image inventory (standard library only)."""
-
-import argparse
 import csv
 from pathlib import Path
-import re
-import sys
 
 
-TIME_PATTERN = re.compile(r"(?:0[1-9]|1[0-2]):[0-5][0-9]")
-DEFAULT_DATA = Path(__file__).resolve().parents[1] / "data" / "raw"
+data_dir = Path(__file__).resolve().parents[1] / "data" / "raw"
 
 
-def read_rows(path, columns):
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
+def read_ids(filename, columns):
+    with (data_dir / filename).open(encoding="utf-8-sig", newline="") as file:
+        reader = csv.DictReader(file)
         if reader.fieldnames != columns:
-            raise ValueError(f"{path.name}: expected columns {columns}")
+            raise ValueError(f"Wrong columns in {filename}: {reader.fieldnames}")
         rows = list(reader)
+
     ids = []
-    for number, row in enumerate(rows, start=2):
-        name = row.get("ID")
+    for row in rows:
+        if None in row or None in row.values():
+            raise ValueError(f"Incomplete or extra fields in {filename}")
+
+        name = row["ID"]
         if not name or name in (".", "..") or "/" in name or "\\" in name:
-            raise ValueError(f"{path.name}:{number}: invalid image ID")
-        if None in row or any(value is None for value in row.values()):
-            raise ValueError(f"{path.name}:{number}: incorrect number of fields")
-        if "time" in columns and not TIME_PATTERN.fullmatch(row["time"]):
-            raise ValueError(f"{path.name}:{number}: expected time 01:00 through 12:59")
+            raise ValueError(f"Invalid filename in {filename}: {name}")
         ids.append(name)
+
+        if "time" in columns:
+            time = row["time"]
+            digits = time[:2] + time[3:]
+            if len(time) != 5 or time[2] != ":" or not digits.isascii() or not digits.isdigit():
+                raise ValueError(f"Invalid time for {name}: {time}")
+            hour = int(time[:2])
+            minute = int(time[3:])
+            if not (1 <= hour <= 12 and 0 <= minute <= 59):
+                raise ValueError(f"Invalid time for {name}: {time}")
+
     if len(ids) != len(set(ids)):
-        raise ValueError(f"{path.name}: duplicate image IDs")
+        raise ValueError(f"Duplicate filenames in {filename}")
     return ids
 
 
-def check_dataset(root):
-    test_ids = None
-    for split, count, columns in (
-        ("train", 100, ["ID", "time"]),
-        ("test", 150, ["ID"]),
-    ):
-        ids = read_rows(root / f"{split}.csv", columns)
-        if len(ids) != count:
-            raise ValueError(f"{split}: expected {count} rows, found {len(ids)}")
-        folder = root / split / split
-        images = {p.name for p in folder.iterdir() if p.is_file() and not p.name.startswith(".")}
-        missing = set(ids) - images
-        extra = images - set(ids)
-        if missing or extra:
-            raise ValueError(f"{split}: missing images {sorted(missing)}; extra files {sorted(extra)}")
-        empty = [name for name in ids if (folder / name).stat().st_size == 0]
-        if empty:
-            raise ValueError(f"{split}: empty image files {empty}")
-        print(f"PASS {split}: {count} unique IDs match {count} nonempty image files")
-        if split == "test":
-            test_ids = ids
-    submission_ids = read_rows(root / "submission_example.csv", ["ID", "time"])
-    if submission_ids != test_ids:
-        raise ValueError("Submission example IDs must match test.csv in the same order")
-    print("PASS submission example: valid time format and all 150 test IDs in order")
-    print("Dataset inventory checks passed. Image decoding is not checked.")
+def check_images(split, ids, expected_count):
+    if len(ids) != expected_count:
+        raise ValueError(f"Expected {expected_count} {split} images, found {len(ids)}")
 
+    # The download has nested folders: train/train and test/test.
+    folder = data_dir / split / split
+    files = set()
+    for file in folder.iterdir():
+        if file.is_file() and not file.name.startswith("."):
+            files.add(file.name)
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
-    args = parser.parse_args()
-    try:
-        check_dataset(args.data_dir)
-    except (OSError, ValueError, csv.Error) as error:
-        print(f"Dataset check failed: {error}", file=sys.stderr)
-        return 1
-    return 0
+    missing = set(ids) - files
+    extra = files - set(ids)
+    if missing or extra:
+        raise ValueError(f"{split}: missing files {sorted(missing)}, extra files {sorted(extra)}")
+
+    for name in ids:
+        if (folder / name).stat().st_size == 0:
+            raise ValueError(f"Empty image file: {name}")
+    print(f"{split}: checked {len(ids)} image files")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    train_ids = read_ids("train.csv", ["ID", "time"])
+    test_ids = read_ids("test.csv", ["ID"])
+    check_images("train", train_ids, 100)
+    check_images("test", test_ids, 150)
+
+    submission_ids = read_ids("submission_example.csv", ["ID", "time"])
+    if submission_ids != test_ids:
+        raise ValueError("Submission IDs do not match test.csv in the same order")
+
+    print("CSV and file checks passed. Image contents are not checked here.")
