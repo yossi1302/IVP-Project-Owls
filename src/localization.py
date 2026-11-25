@@ -172,12 +172,12 @@ def detect_circle(gray, params=PARAMS):
     return cx, cy, r, score
 
 
-def locate_clock(image, params=PARAMS):
-    """Locate the clock face in a BGR image.
+def locate_clock_details(image, params=PARAMS):
+    """Like locate_clock, but also returns diagnostic values.
 
-    Returns (cx, cy, radius) as floats in the original image's pixel
-    coordinates, or None if no convincing circle is found.
-    Raises ValueError if image is None or empty (e.g. cv2.imread failed).
+    Returns a dict with cx, cy, radius (original pixels), score (radial
+    support above chance, roughly 0..1) and scale (resized / original),
+    or None if no convincing circle is found.
     """
     if image is None or image.size == 0:
         raise ValueError("locate_clock needs a non-empty image")
@@ -186,5 +186,19 @@ def locate_clock(image, params=PARAMS):
     found = detect_circle(to_gray(small), params)
     if found is None:
         return None
-    cx, cy, radius, _score = found
-    return to_original_coordinates(cx, cy, radius, scale)
+    cx, cy, radius, score = found
+    cx, cy, radius = to_original_coordinates(cx, cy, radius, scale)
+    return {"cx": cx, "cy": cy, "radius": radius, "score": score, "scale": scale}
+
+
+def locate_clock(image, params=PARAMS):
+    """Locate the clock face in a BGR image.
+
+    Returns (cx, cy, radius) as floats in the original image's pixel
+    coordinates, or None if no convincing circle is found.
+    Raises ValueError if image is None or empty (e.g. cv2.imread failed).
+    """
+    details = locate_clock_details(image, params)
+    if details is None:
+        return None
+    return details["cx"], details["cy"], details["radius"]
