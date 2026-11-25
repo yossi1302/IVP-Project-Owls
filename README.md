@@ -16,6 +16,9 @@ Extract the Kaggle download into `data/raw/`, preserving the archive's `train/tr
 ```sh
 unzip /path/to/ivp-2026.zip -d data/raw
 python3 scripts/check_data.py
+python3 src/data.py
 ```
+
+The loader creates or reuses a fixed 80/20 development/validation split in `data/splits/train_validation.csv` (seed 42). Tune on development images and reserve validation images for evaluation.
 
 Run `jupyter lab` for notebooks. The dataset and `.venv` are excluded from Git. The clock-reading pipeline is not implemented yet.
