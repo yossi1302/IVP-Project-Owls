@@ -24,4 +24,6 @@ The loader creates or reuses a fixed 80/20 development/validation split in `data
 
 `run_localization.py` loads the 80 development images and runs clock detection. It saves circles in original image coordinates and any failures to `outputs/development_localization.csv`. Finding a circle does not guarantee it is the correct clock face.
 
+Once time predictions are available in an `ID,time` CSV, run `python make_submission.py outputs/predictions.csv`. This checks all 150 IDs and times, then writes `outputs/submission.csv` in test order. Times must use hours `01-12` and minutes `00-59`. Missing predictions must be resolved before export.
+
 Run `jupyter lab` for notebooks. The dataset, `.venv`, and generated outputs are excluded from Git. Time prediction is not connected yet.
