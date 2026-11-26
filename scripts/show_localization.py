@@ -5,7 +5,7 @@ Usage:
 
 Writes, under outputs/localization/:
 - <split>/<image>.jpg   one overlay per image (green circle, red centre,
-                        radius and score bottom-left)
+                        radius, score and method bottom-left)
 - <split>_results.csv   detected circle per image, in original pixels
 - <split>_sheet_K.jpg   contact sheets of 25 numbered thumbnails, where the
                         number is the image's row in the CSV (0-based)
@@ -50,7 +50,7 @@ def draw_overlay(image, details):
     cv2.circle(overlay, (cx, cy), radius, (0, 255, 0), thickness)
     cv2.drawMarker(overlay, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS,
                    markerSize=6 * thickness, thickness=thickness)
-    label = f"r={radius} score={details['score']:.2f}"
+    label = f"r={radius} score={details['score']:.2f} {details['method']}"
     cv2.putText(overlay, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX,
                 font_scale, (0, 255, 255), thickness)
     return overlay
@@ -99,22 +99,24 @@ def main():
         image = cv2.imread(str(image_dir / name))
         if image is None:
             print(f"could not read {name}")
-            rows.append([name, "", "", "", "", "", "", "unreadable"])
+            rows.append([name, "", "", "", "", "", "", "", "unreadable"])
             continue
         details = locate_clock_details(image)
         height, width = image.shape[:2]
         if details is None:
-            rows.append([name, width, height, "", "", "", "", "not_found"])
+            rows.append([name, width, height, "", "", "", "", "", "not_found"])
         else:
             values = [f"{details[k]:.1f}" for k in ("cx", "cy", "radius")]
-            rows.append([name, width, height, *values, f"{details['score']:.3f}", "found"])
+            rows.append([name, width, height, *values, f"{details['score']:.3f}",
+                         details["method"], "found"])
         overlay = draw_overlay(image, details)
         cv2.imwrite(str(overlay_dir / (Path(name).stem + ".jpg")), overlay)
         tiles.append(thumbnail(overlay, number))
 
     with (out_dir / f"{args.split}_results.csv").open("w", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(["ID", "width", "height", "cx", "cy", "radius", "score", "status"])
+        writer.writerow(["ID", "width", "height", "cx", "cy", "radius", "score", "method",
+                         "status"])
         writer.writerows(rows)
     write_sheets(tiles, args.split)
 

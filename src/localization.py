@@ -19,7 +19,13 @@ Procedure (identical for every image, no per-file settings):
 5. Among candidates scoring close to the best, take the largest. This picks
    the outer rim rather than an inner ring of the dial (both are circles
    with the same centre). Reject the result if its score is too low.
-6. Divide the coordinates by the resize scale to return to original pixels.
+6. Fallback for weak boundaries: if step 5 found nothing, or its score is
+   below weak_score, steps 3-5 are repeated on a contrast-enhanced copy
+   (CLAHE, i.e. histogram equalisation in local tiles) with more permissive
+   Hough and Canny thresholds. This brings out faint or low-contrast rims.
+   The result with the higher score is kept. The trigger is the same fixed
+   score rule for every image.
+7. Divide the coordinates by the resize scale to return to original pixels.
 """
 
 import cv2
@@ -56,6 +62,16 @@ PARAMS = {
     "prefer_larger_ratio": 0.8,
     # Minimum score (support minus chance level) to accept a circle.
     "min_score": 0.25,
+    # Fallback (step 6). Results scoring below weak_score trigger it; on the
+    # training images 7 of the 8 detections scoring <= 0.40 were wrong.
+    "weak_score": 0.45,
+    # CLAHE contrast limit and tile grid (tiles per image side).
+    "fallback_clahe_clip": 2.0,
+    "fallback_clahe_tiles": 8,
+    # More permissive thresholds than the first pass, because the rim edges
+    # are weaker. Chance correction in the score still applies.
+    "fallback_hough_votes": 20,
+    "fallback_canny_high": 60,
 }
 
 
@@ -172,23 +188,52 @@ def detect_circle(gray, params=PARAMS):
     return cx, cy, r, score
 
 
+def enhance_contrast(gray, params=PARAMS):
+    """Local histogram equalisation (CLAHE) to strengthen faint edges."""
+    tiles = params["fallback_clahe_tiles"]
+    clahe = cv2.createCLAHE(clipLimit=params["fallback_clahe_clip"], tileGridSize=(tiles, tiles))
+    return clahe.apply(gray)
+
+
+def find_circle(gray, params=PARAMS):
+    """First pass plus the weak-boundary fallback (steps 3-6).
+
+    Returns (cx, cy, radius, score, method) in this image's coordinates,
+    where method is "primary" or "fallback", or None.
+    """
+    primary = detect_circle(gray, params)
+    if primary is not None and primary[3] >= params["weak_score"]:
+        return (*primary, "primary")
+
+    fallback_params = dict(params, hough_votes=params["fallback_hough_votes"],
+                           canny_high=params["fallback_canny_high"])
+    fallback = detect_circle(enhance_contrast(gray, params), fallback_params)
+
+    if fallback is None and primary is None:
+        return None
+    if primary is None or (fallback is not None and fallback[3] > primary[3]):
+        return (*fallback, "fallback")
+    return (*primary, "primary")
+
+
 def locate_clock_details(image, params=PARAMS):
     """Like locate_clock, but also returns diagnostic values.
 
     Returns a dict with cx, cy, radius (original pixels), score (radial
-    support above chance, roughly 0..1) and scale (resized / original),
-    or None if no convincing circle is found.
+    support above chance, roughly 0..1), method ("primary" or "fallback")
+    and scale (resized / original), or None if no convincing circle is found.
     """
     if image is None or image.size == 0:
         raise ValueError("locate_clock needs a non-empty image")
 
     small, scale = resize_for_detection(image, params["work_size"])
-    found = detect_circle(to_gray(small), params)
+    found = find_circle(to_gray(small), params)
     if found is None:
         return None
-    cx, cy, radius, score = found
+    cx, cy, radius, score, method = found
     cx, cy, radius = to_original_coordinates(cx, cy, radius, scale)
-    return {"cx": cx, "cy": cy, "radius": radius, "score": score, "scale": scale}
+    return {"cx": cx, "cy": cy, "radius": radius, "score": score,
+            "method": method, "scale": scale}
 
 
 def locate_clock(image, params=PARAMS):
