@@ -10,6 +10,7 @@ from src.evaluation import circular_time_difference, parse_time
 from src.time_reading import (
     angular_difference,
     angles_to_time,
+    hour_minute_consistency_error,
     point_to_clock_angle,
     read_time,
 )
@@ -40,7 +41,6 @@ def make_synthetic_clock(
     cx, cy, radius = circle
     img = np.full((height, width, 3), bg_color, dtype=np.uint8)
 
-    # Dial circle and optional bezel ring.
     cv2.circle(img, (int(round(cx)), int(round(cy))), int(round(radius)), dial_color, -1)
     if draw_bezel:
         cv2.circle(
@@ -51,7 +51,6 @@ def make_synthetic_clock(
             max(2, int(round(radius * 0.03))),
         )
 
-    # Optional distracting hour/minute ticks around the rim.
     if draw_ticks:
         for tick in range(60):
             angle = math.radians(tick * 6.0)
@@ -64,18 +63,11 @@ def make_synthetic_clock(
             p2 = (int(round(cx + r_out * ux)), int(round(cy + r_out * uy)))
             cv2.line(img, p1, p2, hand_color, thickness, lineType=cv2.LINE_AA)
 
-    # Optional distracting horizontal brand bar below 12 o'clock.
     if draw_brand_bar:
         y_bar = int(round(cy - radius * 0.42))
         x_left = int(round(cx - radius * 0.18))
         x_right = int(round(cx + radius * 0.18))
-        cv2.rectangle(
-            img,
-            (x_left, y_bar - 3),
-            (x_right, y_bar + 3),
-            hand_color,
-            -1,
-        )
+        cv2.rectangle(img, (x_left, y_bar - 3), (x_right, y_bar + 3), hand_color, -1)
 
     def draw_hand(angle_deg: float, length_ratio: float, width_ratio: float, color, tail_ratio: float = 0.0):
         angle = math.radians(angle_deg)
@@ -124,14 +116,14 @@ class TestClockGeometry:
     @pytest.mark.parametrize(
         ("dx", "dy", "expected_deg"),
         [
-            (0.0, -10.0, 0.0),    # 12 o'clock (up -> negative y)
-            (10.0, -10.0, 45.0),  # 1:30 direction
-            (10.0, 0.0, 90.0),    # 3 o'clock (right -> positive x)
-            (10.0, 10.0, 135.0),  # 4:30 direction
-            (0.0, 10.0, 180.0),   # 6 o'clock (down -> positive y)
-            (-10.0, 10.0, 225.0), # 7:30 direction
-            (-10.0, 0.0, 270.0),  # 9 o'clock (left -> negative x)
-            (-10.0, -10.0, 315.0),# 10:30 direction
+            (0.0, -10.0, 0.0),
+            (10.0, -10.0, 45.0),
+            (10.0, 0.0, 90.0),
+            (10.0, 10.0, 135.0),
+            (0.0, 10.0, 180.0),
+            (-10.0, 10.0, 225.0),
+            (-10.0, 0.0, 270.0),
+            (-10.0, -10.0, 315.0),
         ],
     )
     def test_point_to_clock_angle(self, dx, dy, expected_deg):
@@ -150,23 +142,32 @@ class TestClockGeometry:
         assert angular_difference(90.0, 270.0) == pytest.approx(180.0)
 
     @pytest.mark.parametrize(
+        ("hour_angle", "minute_angle", "expected_err"),
+        [
+            (90.0, 0.0, 0.0),
+            (105.0, 180.0, 0.0),
+            (89.0, 348.0, 0.0),
+            (0.5, 354.0, 1.0),
+            (90.0, 180.0, 15.0),
+        ],
+    )
+    def test_hour_minute_consistency_error(self, hour_angle, minute_angle, expected_err):
+        assert hour_minute_consistency_error(hour_angle, minute_angle) == pytest.approx(
+            expected_err, abs=1e-6
+        )
+
+    @pytest.mark.parametrize(
         ("hour_angle", "minute_angle", "expected_time"),
         [
             (0.0, 0.0, "12:00"),
             (90.0, 0.0, "03:00"),
             (180.0, 0.0, "06:00"),
             (270.0, 0.0, "09:00"),
-            # Continuous hour hand near next hour mark (02:58 -> hour at 89 deg)
             (89.0, 348.0, "02:58"),
-            # Small positive noise pushing hour hand slightly past 90 deg at 02:58
             (91.5, 348.0, "02:58"),
-            # Near noon wrap: 11:59 with hour hand nudged slightly past 12 o'clock
             (0.5, 354.0, "11:59"),
-            # Minute hand slightly before 12 (359 deg rounds to :00 of hour 3)
             (89.5, 359.0, "03:00"),
-            # 12:30 -> hour hand halfway between 12 and 1 (15 deg)
             (15.0, 180.0, "12:30"),
-            # 12:59 -> hour hand at 29.5 deg
             (29.5, 354.0, "12:59"),
         ],
     )
@@ -185,12 +186,10 @@ class TestSyntheticClockReading:
             "07:10",
             "10:15",
             "12:30",
-            # Hour hand very close to next hour mark
             "02:58",
             "05:55",
             "11:58",
             "12:55",
-            # Collinear opposite hands
             "06:00",
             "09:15",
             "03:45",
@@ -252,6 +251,26 @@ class TestSyntheticClockReading:
         assert pred is not None
         assert circular_time_difference(pred, "08:25") <= 1
 
+    def test_colored_hands_on_colored_dial(self):
+        circle = (250.0, 250.0, 170.0)
+        img = make_synthetic_clock(
+            "02:35",
+            circle=circle,
+            dial_color=(170, 75, 45),   # Blue dial
+            hand_color=(45, 170, 45),   # Green hands with chromatic contrast
+        )
+        pred = read_time(img, circle)
+        assert pred is not None
+        assert circular_time_difference(pred, "02:35") <= 1
+
+    def test_shifted_hand_pivot_from_localized_circle(self):
+        true_circle = (250.0, 250.0, 180.0)
+        shifted_circle = (262.0, 260.0, 180.0)
+        img = make_synthetic_clock("10:10", circle=true_circle)
+        pred = read_time(img, shifted_circle)
+        assert pred is not None
+        assert circular_time_difference(pred, "10:10") <= 2
+
     def test_off_center_clock_in_original_image_coordinates(self):
         circle = (520.0, 290.0, 120.0)
         img = make_synthetic_clock(
@@ -266,6 +285,7 @@ class TestSyntheticClockReading:
     def test_failure_cases_return_none(self):
         circle = (200.0, 200.0, 150.0)
         blank = make_synthetic_clock(None, image_size=(400, 400), circle=circle)
+        assert read_time(blank, None) is None
         assert read_time(blank, circle) is None
         assert read_time(blank, (200.0, 200.0, 0.0)) is None
         assert read_time(blank, (200.0, 200.0, -50.0)) is None
