@@ -1,6 +1,7 @@
 /data/raw/
 /ivp-2026.zip
 .venv/
+/.vscode/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
