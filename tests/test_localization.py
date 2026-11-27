@@ -15,7 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.localization import (  # noqa: E402
     PARAMS,
+    detect_circle,
     locate_clock,
+    locate_clock_details,
     resize_for_detection,
     to_original_coordinates,
 )
@@ -98,6 +100,29 @@ def test_circle_smaller_than_min_radius_is_ignored():
     r = int(0.5 * PARAMS["min_radius_frac"] * 600)
     image = draw_clock(800, 600, 400, 300, r)
     assert locate_clock(image) is None
+
+
+def faint_rim_image(delta=8):
+    """Grey noise with a thin rim only `delta` grey levels brighter."""
+    rng = np.random.default_rng(0)
+    image = rng.normal(128, 3, (600, 800)).clip(0, 255).astype(np.uint8)
+    cv2.circle(image, (420, 300), 200, 128 + delta, 6)
+    return image
+
+
+def test_faint_rim_needs_fallback():
+    image = faint_rim_image()
+    small, _scale = resize_for_detection(image)
+    assert detect_circle(small) is None, "first pass alone should miss this rim"
+    details = locate_clock_details(image)
+    assert details is not None and details["method"] == "fallback"
+    assert_close((details["cx"], details["cy"], details["radius"]), 420, 300, 200)
+
+
+def test_clear_clock_uses_first_pass():
+    details = locate_clock_details(draw_clock(1200, 900, 600, 450, 300))
+    assert details is not None and details["method"] == "primary"
+    assert details["score"] >= PARAMS["weak_score"]
 
 
 @pytest.mark.parametrize("bad", [None, np.zeros((0, 0, 3), np.uint8)])
