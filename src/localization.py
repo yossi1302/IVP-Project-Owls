@@ -37,6 +37,7 @@ PARAMS = {
     # Longest image side used for detection. Larger images are shrunk to this.
     "work_size": 512,
     # Median blur kernel (odd). Removes fine texture so the rim dominates.
+    # 1 or less switches the blur off.
     "blur_kernel": 5,
     # Hough accumulator resolution: 1 = same resolution as the image.
     "hough_dp": 1.2,
@@ -152,7 +153,10 @@ def detect_circle(gray, params=PARAMS):
 
     Returns (cx, cy, radius, score) in this image's coordinates, or None.
     """
-    blurred = cv2.medianBlur(gray, params["blur_kernel"])
+    if params["blur_kernel"] > 1:
+        blurred = cv2.medianBlur(gray, params["blur_kernel"])
+    else:  # no smoothing; used when comparing preprocessing options
+        blurred = gray
     short_side = min(gray.shape)
     min_r = max(1, int(params["min_radius_frac"] * short_side))
     max_r = int(params["max_radius_frac"] * short_side)
