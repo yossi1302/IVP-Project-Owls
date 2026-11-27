@@ -1,4 +1,4 @@
-"""Unit and synthetic-clock tests for hand detection and angle conversion."""
+"""Unit and synthetic-clock tests for src/time_reading.py."""
 
 import math
 
@@ -6,13 +6,12 @@ import cv2
 import numpy as np
 import pytest
 
-from src.evaluation import parse_time
+from src.evaluation import circular_time_difference, parse_time
 from src.time_reading import (
     angular_difference,
     angles_to_time,
-    detect_hand_candidates,
-    extract_clock_face,
     point_to_clock_angle,
+    read_time,
 )
 
 
@@ -34,13 +33,14 @@ def make_synthetic_clock(
     draw_counterweight: bool = False,
     draw_brand_bar: bool = False,
     second_hand_angle_deg: float | None = None,
-    second_hand_color: tuple[int, int, int] = (20, 20, 220),
+    second_hand_color: tuple[int, int, int] = (20, 20, 220),  # BGR red
 ) -> np.ndarray:
     """Render a synthetic BGR analogue clock image for geometry/detection tests."""
     height, width = image_size
     cx, cy, radius = circle
     img = np.full((height, width, 3), bg_color, dtype=np.uint8)
 
+    # Dial circle and optional bezel ring.
     cv2.circle(img, (int(round(cx)), int(round(cy))), int(round(radius)), dial_color, -1)
     if draw_bezel:
         cv2.circle(
@@ -51,6 +51,7 @@ def make_synthetic_clock(
             max(2, int(round(radius * 0.03))),
         )
 
+    # Optional distracting hour/minute ticks around the rim.
     if draw_ticks:
         for tick in range(60):
             angle = math.radians(tick * 6.0)
@@ -63,11 +64,18 @@ def make_synthetic_clock(
             p2 = (int(round(cx + r_out * ux)), int(round(cy + r_out * uy)))
             cv2.line(img, p1, p2, hand_color, thickness, lineType=cv2.LINE_AA)
 
+    # Optional distracting horizontal brand bar below 12 o'clock.
     if draw_brand_bar:
         y_bar = int(round(cy - radius * 0.42))
         x_left = int(round(cx - radius * 0.18))
         x_right = int(round(cx + radius * 0.18))
-        cv2.rectangle(img, (x_left, y_bar - 3), (x_right, y_bar + 3), hand_color, -1)
+        cv2.rectangle(
+            img,
+            (x_left, y_bar - 3),
+            (x_right, y_bar + 3),
+            hand_color,
+            -1,
+        )
 
     def draw_hand(angle_deg: float, length_ratio: float, width_ratio: float, color, tail_ratio: float = 0.0):
         angle = math.radians(angle_deg)
@@ -116,14 +124,14 @@ class TestClockGeometry:
     @pytest.mark.parametrize(
         ("dx", "dy", "expected_deg"),
         [
-            (0.0, -10.0, 0.0),
-            (10.0, -10.0, 45.0),
-            (10.0, 0.0, 90.0),
-            (10.0, 10.0, 135.0),
-            (0.0, 10.0, 180.0),
-            (-10.0, 10.0, 225.0),
-            (-10.0, 0.0, 270.0),
-            (-10.0, -10.0, 315.0),
+            (0.0, -10.0, 0.0),    # 12 o'clock (up -> negative y)
+            (10.0, -10.0, 45.0),  # 1:30 direction
+            (10.0, 0.0, 90.0),    # 3 o'clock (right -> positive x)
+            (10.0, 10.0, 135.0),  # 4:30 direction
+            (0.0, 10.0, 180.0),   # 6 o'clock (down -> positive y)
+            (-10.0, 10.0, 225.0), # 7:30 direction
+            (-10.0, 0.0, 270.0),  # 9 o'clock (left -> negative x)
+            (-10.0, -10.0, 315.0),# 10:30 direction
         ],
     )
     def test_point_to_clock_angle(self, dx, dy, expected_deg):
@@ -148,11 +156,17 @@ class TestClockGeometry:
             (90.0, 0.0, "03:00"),
             (180.0, 0.0, "06:00"),
             (270.0, 0.0, "09:00"),
+            # Continuous hour hand near next hour mark (02:58 -> hour at 89 deg)
             (89.0, 348.0, "02:58"),
+            # Small positive noise pushing hour hand slightly past 90 deg at 02:58
             (91.5, 348.0, "02:58"),
+            # Near noon wrap: 11:59 with hour hand nudged slightly past 12 o'clock
             (0.5, 354.0, "11:59"),
+            # Minute hand slightly before 12 (359 deg rounds to :00 of hour 3)
             (89.5, 359.0, "03:00"),
+            # 12:30 -> hour hand halfway between 12 and 1 (15 deg)
             (15.0, 180.0, "12:30"),
+            # 12:59 -> hour hand at 29.5 deg
             (29.5, 354.0, "12:59"),
         ],
     )
@@ -160,19 +174,100 @@ class TestClockGeometry:
         assert angles_to_time(hour_angle, minute_angle) == expected_time
 
 
-class TestCandidateHandDetection:
-    def test_detects_both_hands_on_synthetic_clock(self):
+class TestSyntheticClockReading:
+    @pytest.mark.parametrize(
+        "target_time",
+        [
+            "03:00",
+            "09:00",
+            "01:20",
+            "04:40",
+            "07:10",
+            "10:15",
+            "12:30",
+            # Hour hand very close to next hour mark
+            "02:58",
+            "05:55",
+            "11:58",
+            "12:55",
+            # Collinear opposite hands
+            "06:00",
+            "09:15",
+            "03:45",
+        ],
+    )
+    def test_standard_synthetic_clocks(self, target_time):
         circle = (250.0, 250.0, 180.0)
-        img = make_synthetic_clock("03:00", circle=circle)
-        face = extract_clock_face(img, circle)
-        candidates = detect_hand_candidates(face)
-        assert len(candidates) == 2
-        angles = sorted(c.angle_deg for c in candidates)
-        assert angular_difference(angles[0], 0.0) <= 3.0
-        assert angular_difference(angles[1], 90.0) <= 3.0
+        img = make_synthetic_clock(target_time, circle=circle)
+        pred = read_time(img, circle)
+        assert pred is not None
+        assert circular_time_difference(pred, target_time) <= 1
 
-    def test_detects_no_candidates_on_blank_dial(self):
+    @pytest.mark.parametrize("target_time", ["12:00", "03:16", "06:33", "09:49"])
+    def test_overlapping_hands(self, target_time):
+        circle = (250.0, 250.0, 180.0)
+        img = make_synthetic_clock(target_time, circle=circle)
+        pred = read_time(img, circle)
+        assert pred is not None
+        assert circular_time_difference(pred, target_time) <= 2
+
+    def test_ignores_red_second_hand_and_distractions(self):
+        circle = (250.0, 250.0, 180.0)
+        img = make_synthetic_clock(
+            "10:10",
+            circle=circle,
+            draw_ticks=True,
+            draw_bezel=True,
+            draw_counterweight=True,
+            draw_brand_bar=True,
+            second_hand_angle_deg=210.0,
+            second_hand_color=(20, 20, 230),
+        )
+        pred = read_time(img, circle)
+        assert pred is not None
+        assert circular_time_difference(pred, "10:10") <= 1
+
+    def test_ignores_thin_dark_second_hand(self):
+        circle = (250.0, 250.0, 180.0)
+        img = make_synthetic_clock(
+            "04:20",
+            circle=circle,
+            second_hand_angle_deg=330.0,
+            second_hand_color=(25, 25, 25),
+        )
+        pred = read_time(img, circle)
+        assert pred is not None
+        assert circular_time_difference(pred, "04:20") <= 1
+
+    def test_dark_dial_light_hands(self):
+        circle = (250.0, 250.0, 170.0)
+        img = make_synthetic_clock(
+            "08:25",
+            circle=circle,
+            dial_color=(30, 30, 30),
+            bg_color=(80, 80, 80),
+            hand_color=(235, 235, 235),
+        )
+        pred = read_time(img, circle)
+        assert pred is not None
+        assert circular_time_difference(pred, "08:25") <= 1
+
+    def test_off_center_clock_in_original_image_coordinates(self):
+        circle = (520.0, 290.0, 120.0)
+        img = make_synthetic_clock(
+            "07:45",
+            image_size=(600, 800),
+            circle=circle,
+        )
+        pred = read_time(img, circle)
+        assert pred is not None
+        assert circular_time_difference(pred, "07:45") <= 1
+
+    def test_failure_cases_return_none(self):
         circle = (200.0, 200.0, 150.0)
         blank = make_synthetic_clock(None, image_size=(400, 400), circle=circle)
-        face = extract_clock_face(blank, circle)
-        assert detect_hand_candidates(face) == []
+        assert read_time(blank, circle) is None
+        assert read_time(blank, (200.0, 200.0, 0.0)) is None
+        assert read_time(blank, (200.0, 200.0, -50.0)) is None
+        assert read_time(blank, (999.0, 200.0, 150.0)) is None
+        assert read_time(np.empty((0, 0, 3), dtype=np.uint8), circle) is None

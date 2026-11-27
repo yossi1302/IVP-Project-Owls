@@ -566,3 +566,125 @@ def detect_hand_candidates(
     candidates = _deduplicate_candidates(candidates, angle_tol_deg=5.5)
     candidates = _filter_counterweight_tails(candidates)
     return candidates
+
+
+def _is_likely_second_hand(
+    cand: CandidateHand, others: Sequence[CandidateHand]
+) -> bool:
+    """Identify a thin or distinctively colored second hand when >= 3 hands exist."""
+    if len(others) < 2:
+        return False
+
+    other_widths = sorted((o.width for o in others), reverse=True)
+    ref_width = other_widths[1]  # Width of the second-thickest other hand
+    other_sats = [o.mean_saturation for o in others]
+    median_other_sat = float(np.median(other_sats))
+
+    is_much_thinner = cand.width < 0.62 * ref_width
+    is_vividly_colored = (
+        cand.mean_saturation >= 85.0
+        and cand.mean_saturation > median_other_sat + 45.0
+    ) or (cand.redness >= 40.0 and all(o.redness < 15.0 for o in others))
+
+    if is_vividly_colored and cand.width <= ref_width * 1.05:
+        return True
+    if is_much_thinner:
+        return True
+    return False
+
+
+def _overlap_consistency_error(angle_deg: float) -> float:
+    """Return angular error (deg) if both hands were overlapping at ``angle_deg``."""
+    minute = int(round((angle_deg % 360.0) / 6.0)) % 60
+    return min(
+        angular_difference(angle_deg, ((h + minute / 60.0) * 30.0) % 360.0)
+        for h in range(12)
+    )
+
+
+def select_hour_and_minute_hands(
+    candidates: Sequence[CandidateHand],
+) -> tuple[CandidateHand, CandidateHand] | None:
+    """Choose ``(hour_hand, minute_hand)`` from detected candidate hands.
+
+    Handles:
+    - 0 candidates -> returns ``None``.
+    - 1 candidate -> accepts as overlapping hands only if the hand is long enough
+      and its angle is geometrically consistent with an hour/minute overlap.
+    - 3+ candidates -> removes likely second hands (very thin or vividly colored)
+      and ranks remaining hands by thickness, length, and solidity.
+    - 2 candidates -> distinguishes minute hand (longer, or thinner on tie) from
+      hour hand (shorter, or thicker on tie).
+    """
+    if not candidates:
+        return None
+
+    pool = list(candidates)
+
+    # Filter out likely second hands when 3 or more hands are present.
+    while len(pool) >= 3:
+        second_hand_idx = None
+        best_second_score = -1.0
+        for idx, cand in enumerate(pool):
+            others = [c for j, c in enumerate(pool) if j != idx]
+            if _is_likely_second_hand(cand, others):
+                # Prefer removing the thinnest / most saturated second hand first.
+                score = cand.mean_saturation / 255.0 + max(0.0, cand.redness) / 100.0 - cand.width * 10.0
+                if score > best_second_score:
+                    best_second_score = score
+                    second_hand_idx = idx
+        if second_hand_idx is None:
+            break
+        pool.pop(second_hand_idx)
+
+    # If more than 2 candidates still remain, keep the two strongest hands.
+    if len(pool) > 2:
+        pool.sort(
+            key=lambda c: (c.width * 2.0 + c.tip_radius) * c.solidity,
+            reverse=True,
+        )
+        pool = pool[:2]
+
+    # Single detected hand: accept only if consistent with overlapping hands.
+    if len(pool) == 1:
+        sole = pool[0]
+        if sole.tip_radius >= 0.50 and _overlap_consistency_error(sole.angle_deg) <= 8.0:
+            return sole, sole
+        return None
+
+    hand_a, hand_b = pool[0], pool[1]
+    # Primary cue: minute hand is longer than hour hand.
+    if abs(hand_a.tip_radius - hand_b.tip_radius) >= 0.04:
+        if hand_a.tip_radius > hand_b.tip_radius:
+            return hand_b, hand_a
+        return hand_a, hand_b
+
+    # Tie-breaker when lengths are very close: hour hand is typically thicker.
+    if hand_a.width >= hand_b.width:
+        return hand_a, hand_b
+    return hand_b, hand_a
+
+
+def read_time(image: np.ndarray, circle: Sequence[float]) -> str | None:
+    """Read the time shown on an analogue clock face.
+
+    Args:
+        image: OpenCV BGR image (original resolution).
+        circle: ``(cx, cy, radius)`` in original image coordinates.
+
+    Returns:
+        Predicted time formatted as ``"HH:MM"`` (hours ``01``–``12``), or
+        ``None`` when hand detection fails.
+    """
+    validated = _validate_inputs(image, circle)
+    if validated is None:
+        return None
+
+    clock_bgr = extract_clock_face(image, validated, work_radius=WORK_RADIUS)
+    candidates = detect_hand_candidates(clock_bgr, work_radius=WORK_RADIUS)
+    selected = select_hour_and_minute_hands(candidates)
+    if selected is None:
+        return None
+
+    hour_hand, minute_hand = selected
+    return angles_to_time(hour_hand.angle_deg, minute_hand.angle_deg)
