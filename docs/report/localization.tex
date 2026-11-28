@@ -1,0 +1,135 @@
+% Clock localization subsection (Sean Ermilov).
+% Meant to be \input{} into the Methodology section of the group report.
+% Needs: amsmath, graphicx (both already in the template) and the entries in
+% localization.bib added to references.bib. Figures are generated with
+%   .venv/bin/python scripts/make_localization_figures.py
+% into outputs/report_figures/ and should be copied next to the report as
+% figures/localization_*.png.
+
+\subsection{Clock localization}
+\label{sec:localization}
+
+The first stage finds the clock face so that the later stages can work
+relative to its centre and radius. It returns a circle $(c_x, c_y, r)$ in the
+pixel coordinates of the original photograph, or reports that no clock was
+found. Every image goes through the same fixed procedure; no parameters are
+chosen per image and no positions are annotated by hand. The parameters were
+set by inspecting results on the training images only.
+
+\paragraph{Resizing.}
+The photographs range from about $250$ to $10000$ pixels wide. Each image is
+shrunk with area interpolation so that its longest side is at most $512$
+pixels, with scale factor $s = 512 / \max(w, h)$ (smaller images are not
+enlarged, $s = 1$). This makes all pixel-based parameters below mean the same
+thing for every image and keeps detection fast. A circle found at
+$(c'_x, c'_y, r')$ in the resized image is returned as
+$(c'_x / s,\; c'_y / s,\; r' / s)$ in the original image.
+
+\paragraph{Preprocessing.}
+The resized image is converted to grayscale and smoothed with a $5 \times 5$
+median filter \citep{huang1979median}. The median filter removes fine texture
+(wood grain, bark, printed dial details) while keeping step edges such as the
+clock rim sharp. We compared this with no smoothing, a stronger median filter,
+Gaussian and bilateral filtering \citep{tomasi1998bilateral}, contrast-limited
+adaptive histogram equalization (CLAHE) \citep{zuiderveld1994clahe}, the HSV
+saturation and value channels, and working sizes of $384$ and $768$ pixels.
+None of these was clearly better on the training images, so the simplest
+option was kept.
+
+\paragraph{Circle candidates.}
+Candidate circles are generated with the gradient-based circle Hough transform
+\citep{duda1972hough, kimme1975circles, yuen1990circles} as implemented in
+OpenCV \citep{bradski2000opencv}. Edge pixels from the Canny detector
+\citep{canny1986edge} vote for centres along their gradient direction, and
+radii are then estimated for the strongest centres. The radius is limited to
+between $5\%$ and $60\%$ of the shorter image side, which covers both small
+clocks on buildings and close-ups. Up to $60$ candidates are kept, because the
+strongest Hough peak is often a circle formed by background texture rather
+than the clock (Fig.~\ref{fig:loc-pipeline}d).
+
+\paragraph{Radial edge score.}
+Hough votes alone do not separate a clock rim from texture, so each candidate
+is re-scored. We sample $N = 360$ points $\mathbf{p}_i$ on the circle, with
+outward unit normals $\mathbf{u}_i$. Point $i$ is \emph{supported} if, within
+$\pm 2$ pixels along $\mathbf{u}_i$, there is a Canny edge pixel whose image
+gradient $\nabla I$ is nearly parallel to the radius:
+\begin{equation}
+  \left| \frac{\nabla I \cdot \mathbf{u}_i}{\lVert \nabla I \rVert} \right| \geq 0.8 .
+\end{equation}
+A clock rim is a closed contour whose gradients point towards or away from
+the centre all the way round, which is the same property the gradient-based
+Hough transform uses for voting \citep{kimme1975circles}. Texture produces
+edges in random directions. The score is the fraction of supported points
+minus the fraction expected by chance:
+\begin{equation}
+  S = \frac{1}{N} \sum_{i=1}^{N} \text{supported}_i \;-\; S_0, \qquad
+  S_0 = 1 - \left(1 - \rho\,\kappa\right)^{5},
+\end{equation}
+where $\rho$ is the fraction of Canny edge pixels in the image,
+$\kappa = 2 \arccos(0.8) / \pi \approx 0.41$ is the probability that a random
+gradient direction passes the test, and $5$ is the number of pixels checked
+per point. Without the correction $S_0$, any circle on a busy background would
+receive a high score.
+
+\paragraph{Selection.}
+A clock face usually contains several concentric circles: the outer rim, the
+inner edge of the bezel, and rings of the dial. These often score almost the
+same. Among the candidates whose score is at least $80\%$ of the best score,
+the one with the largest radius is selected, which favours the outer rim. If
+the best score is below $0.25$, no circle is accepted.
+
+\paragraph{Fallback for weak boundaries.}
+When the selected circle scores below $0.45$, or no circle is accepted, the
+rim is usually faint or low in contrast. In that case the candidate generation,
+scoring and selection are repeated on a CLAHE-enhanced copy of the grayscale
+image \citep{pizer1987ahe, zuiderveld1994clahe} (clip limit $2$, $8 \times 8$
+tiles), with more permissive thresholds (Canny upper threshold $60$ instead of
+$100$, $20$ instead of $30$ Hough votes). Of the two results, the one with the
+higher score is kept (Fig.~\ref{fig:loc-fallback}). CLAHE is used only as a
+fallback because it also strengthens background texture: as a first step it
+produced more weak detections on the training images. The trigger is the same
+score rule for every image.
+
+\paragraph{Limitations.}
+The method assumes that the clock face is bounded by a circle. Square or
+rectangular clocks, clocks without a rim, and strongly tilted clocks (which
+appear as ellipses) are only approximated or missed
+(Fig.~\ref{fig:loc-examples}, bottom row). The score indicates weak
+detections, but a high score does not guarantee that the right circle was
+chosen; an inner dial ring can score as high as the rim.
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/localization_pipeline.png}
+    \caption{Localization steps on one training image: (a) resized input,
+    (b) grayscale with median filter, (c) Canny edges, (d) Hough candidates
+    coloured by radial edge score, (e) selected circle. Most candidates come
+    from the bark texture and receive low scores. Photo by yaniv-knobel from
+    \url{unsplash.com}.}
+    \label{fig:loc-pipeline}
+\end{figure*}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/localization_fallback.png}
+    \caption{Fallback for weak boundaries. Left: first pass. Middle:
+    CLAHE-enhanced image with the fallback result. Right: result kept (higher
+    score). Photos by sevenstormphotography from \url{pexels.com} (top) and
+    yanghong-yu from \url{unsplash.com} (bottom).}
+    \label{fig:loc-fallback}
+\end{figure}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/localization_examples.png}
+    \caption{Typical localization results (green) and failure cases (red):
+    a square clock, a clock without a rim, a small clock on a tower where a
+    larger wrong circle wins, and an inner dial ring chosen instead of the rim.
+    Photos from \url{pexels.com}, \url{unsplash.com} and
+    \url{commons.wikimedia.org}; photographers in the order shown:
+    pixabay, ondrej-supitar, necip-duman, yash-parashar, ali-bokhari,
+    will-grobbelaar, Stefi123, chirayu-trivedi, ihor-lypnytskyi, jason-tirta.}
+    % TODO: check the licence of the Wikimedia photo (Stefi123) and add it,
+    % as in the template's example caption.
+    \label{fig:loc-examples}
+\end{figure*}

@@ -148,10 +148,12 @@ def chance_support(edges, params=PARAMS):
     return 1 - (1 - p * cone) ** checked
 
 
-def detect_circle(gray, params=PARAMS):
-    """Find the clock circle in an (already resized) grayscale image.
+def score_candidates(gray, params=PARAMS):
+    """Steps 2-4: smooth, get Hough candidates and score each one.
 
-    Returns (cx, cy, radius, score) in this image's coordinates, or None.
+    Returns (scored, blurred, edges) where scored is a list of
+    (score, cx, cy, radius) in this image's coordinates (empty if Hough
+    found nothing). blurred and edges are returned for figures/inspection.
     """
     if params["blur_kernel"] > 1:
         blurred = cv2.medianBlur(gray, params["blur_kernel"])
@@ -171,10 +173,10 @@ def detect_circle(gray, params=PARAMS):
         minRadius=min_r,
         maxRadius=max_r,
     )
-    if circles is None:
-        return None
-
     edges = cv2.Canny(blurred, params["canny_high"] // 2, params["canny_high"])
+    if circles is None:
+        return [], blurred, edges
+
     gx = cv2.Sobel(blurred, cv2.CV_32F, 1, 0)
     gy = cv2.Sobel(blurred, cv2.CV_32F, 0, 1)
     chance = chance_support(edges, params)
@@ -183,13 +185,31 @@ def detect_circle(gray, params=PARAMS):
     for cx, cy, r in circles[0][: params["max_candidates"]]:
         score = radial_support(edges, gx, gy, cx, cy, r, params) - chance
         scored.append((score, float(cx), float(cy), float(r)))
+    return scored, blurred, edges
 
+
+def select_circle(scored, params=PARAMS):
+    """Step 5: take the largest candidate scoring close to the best one.
+
+    Returns (cx, cy, radius, score) or None if nothing scores high enough.
+    """
+    if not scored:
+        return None
     best_score = max(s[0] for s in scored)
     if best_score < params["min_score"]:
         return None
     competitors = [s for s in scored if s[0] >= params["prefer_larger_ratio"] * best_score]
     score, cx, cy, r = max(competitors, key=lambda s: s[3])
     return cx, cy, r, score
+
+
+def detect_circle(gray, params=PARAMS):
+    """Find the clock circle in an (already resized) grayscale image.
+
+    Returns (cx, cy, radius, score) in this image's coordinates, or None.
+    """
+    scored, _blurred, _edges = score_candidates(gray, params)
+    return select_circle(scored, params)
 
 
 def enhance_contrast(gray, params=PARAMS):
