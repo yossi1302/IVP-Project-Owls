@@ -1,5 +1,3 @@
-"""Unit and synthetic-clock tests for src/time_reading.py."""
-
 import math
 
 import cv2
@@ -34,9 +32,8 @@ def make_synthetic_clock(
     draw_counterweight: bool = False,
     draw_brand_bar: bool = False,
     second_hand_angle_deg: float | None = None,
-    second_hand_color: tuple[int, int, int] = (20, 20, 220),  # BGR red
+    second_hand_color: tuple[int, int, int] = (20, 20, 220),
 ) -> np.ndarray:
-    """Render a synthetic BGR analogue clock image for geometry/detection tests."""
     height, width = image_size
     cx, cy, radius = circle
     img = np.full((height, width, 3), bg_color, dtype=np.uint8)
@@ -256,8 +253,8 @@ class TestSyntheticClockReading:
         img = make_synthetic_clock(
             "02:35",
             circle=circle,
-            dial_color=(170, 75, 45),   # Blue dial
-            hand_color=(45, 170, 45),   # Green hands with chromatic contrast
+            dial_color=(170, 75, 45),
+            hand_color=(45, 170, 45),
         )
         pred = read_time(img, circle)
         assert pred is not None

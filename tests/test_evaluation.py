@@ -1,5 +1,3 @@
-"""Unit tests for src/evaluation.py."""
-
 import pytest
 
 from src.evaluation import (
@@ -48,7 +46,7 @@ class TestParseAndFormat:
             "ab:cd",
             " 12:00",
             "12:00 ",
-            "１２:００",  # full-width Unicode digits
+            "１２:００",
             None,
             1200,
         ],
@@ -103,13 +101,10 @@ class TestCircularTimeDifference:
     @pytest.mark.parametrize(
         ("time_a", "time_b", "expected"),
         [
-            # Exact matches
             ("12:00", "12:00", 0),
             ("06:30", "06:30", 0),
-            # Example from project brief
             ("12:59", "01:01", 2),
             ("01:01", "12:59", 2),
-            # Noon / midnight (12:00) crossings
             ("11:59", "12:00", 1),
             ("11:59", "12:01", 2),
             ("12:01", "11:59", 2),
@@ -119,10 +114,8 @@ class TestCircularTimeDifference:
             ("11:44", "12:15", 31),
             ("11:30", "12:30", 60),
             ("11:00", "01:00", 120),
-            # Maximum possible difference on a 12-hour clock (6 hours = 360 min)
             ("12:00", "06:00", MAX_CIRCULAR_ERROR_MINUTES),
             ("03:15", "09:15", MAX_CIRCULAR_ERROR_MINUTES),
-            # Just past halfway wraps the shorter way
             ("12:00", "06:01", 359),
             ("12:00", "05:59", 359),
             ("01:00", "07:05", 355),
@@ -137,19 +130,15 @@ class TestCompetitionScoring:
     @pytest.mark.parametrize(
         ("error_minutes", "expected_score"),
         [
-            # +- 2 minutes: full points (1.0)
             (0, 1.0),
             (1, 1.0),
             (2, 1.0),
-            # +- 3-10 minutes: high points (0.8)
             (3, 0.8),
             (6, 0.8),
             (10, 0.8),
-            # +- 11-30 minutes: half points (0.5)
             (11, 0.5),
             (20, 0.5),
             (30, 0.5),
-            # +- 31+ minutes: no points (0.0)
             (31, 0.0),
             (60, 0.0),
             (360, 0.0),
@@ -166,22 +155,17 @@ class TestCompetitionScoring:
     @pytest.mark.parametrize(
         ("predicted", "actual", "expected_score"),
         [
-            # Exact and +-2 min boundaries (including noon & 12->1 crossings)
             ("03:15", "03:15", 1.0),
             ("12:59", "01:01", 1.0),
             ("11:59", "12:01", 1.0),
-            # +-3 min and +-10 min boundaries across 12:00
             ("11:58", "12:01", 0.8),
             ("11:55", "12:05", 0.8),
             ("12:05", "11:55", 0.8),
-            # +-11 min and +-30 min boundaries across 12:00
             ("11:54", "12:05", 0.5),
             ("11:45", "12:15", 0.5),
             ("12:15", "11:45", 0.5),
-            # +-31 min and maximum circular error
             ("11:44", "12:15", 0.0),
             ("12:00", "06:00", 0.0),
-            # Failed detection
             (None, "12:00", 0.0),
         ],
     )
@@ -198,14 +182,7 @@ class TestCompetitionScoring:
 
     def test_accuracy_with_tolerance_and_evaluate_predictions(self):
         targets = ["12:00", "01:01", "12:05", "12:15", "06:00", "09:00"]
-        preds = [
-            "11:59",  # err=1  -> 1.0
-            "12:59",  # err=2  -> 1.0
-            "11:55",  # err=10 -> 0.8
-            "11:45",  # err=30 -> 0.5
-            "06:31",  # err=31 -> 0.0
-            None,     # failed -> 0.0
-        ]
+        preds = ["11:59", "12:59", "11:55", "11:45", "06:31", None]
         expected_score = (1.0 + 1.0 + 0.8 + 0.5 + 0.0 + 0.0) / 6.0
 
         assert accuracy_with_tolerance(preds, targets) == pytest.approx(expected_score)
